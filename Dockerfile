@@ -123,6 +123,19 @@ RUN git clone --branch ${T1K_GIT_TAG} https://github.com/mourisl/T1K.git /tmp/t1
        /opt/t1k-${T1K_VERSION}/ && \
     rm -rf /tmp/t1k-src
 
+RUN ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then \
+        AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"; \
+    elif [ "$ARCH" = "aarch64" ]; then \
+        AWS_URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"; \
+    else \
+        echo "Unsupported architecture: $ARCH" && exit 1; \
+    fi && \
+    curl -sL "$AWS_URL" -o "awscliv2.zip" && \
+    unzip -q awscliv2.zip && \
+    ./aws/install && \
+    rm -rf aws awscliv2.zip
+
 # Clone segdup-caller. The actual `pip install` happens in the
 # python-builder stage so the venv lives in a clean image.
 RUN git clone --branch ${SEGDUP_CALLER_GIT_TAG} https://github.com/Sentieon/segdup-caller.git /opt/segdup-caller-src && \
