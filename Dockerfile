@@ -71,7 +71,6 @@ RUN mkdir -p /opt/bcftools/ && \
     make -j"$(nproc)" install && \
     strip /usr/local/bin/bcftools
 
-# Install bedtools (static binary on amd64; source build on arm64)
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /usr/local/bin/bedtools-${BEDTOOLS_VERSION} \
         "https://github.com/arq5x/bedtools2/releases/download/v${BEDTOOLS_VERSION}/bedtools.static.binary" && \
@@ -81,7 +80,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       mkdir -p /tmp/bedtools && \
       curl -fL "https://github.com/arq5x/bedtools2/releases/download/v${BEDTOOLS_VERSION}/bedtools-${BEDTOOLS_VERSION}.tar.gz" | \
         tar -zxf - -C /tmp/bedtools --strip-components=1 && \
-      make -C /tmp/bedtools -j"$(nproc)" && \
+      make -C /tmp/bedtools -j"$(nproc)" CXX="g++ -include cstdint" && \
       cp /tmp/bedtools/bin/bedtools /usr/local/bin/bedtools-${BEDTOOLS_VERSION} && \
       strip /usr/local/bin/bedtools-${BEDTOOLS_VERSION} && \
       rm -rf /tmp/bedtools; \
