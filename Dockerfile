@@ -96,7 +96,7 @@ RUN mkdir -p /opt/isa-l && \
     ./configure --prefix=/usr --libdir=/usr/lib && \
     make -j"$(nproc)" install
 
-# Install mosdepth (static binary on amd64; bioconda binary + libhts on arm64)
+# Kept unchanged to preserve downstream arm64 layer cache; mosdepth is now installed via mosdepth-builder below.
 RUN mkdir -p /opt/arm64-libs && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /usr/local/bin/mosdepth-${MOSDEPTH_VERSION} \
@@ -258,6 +258,30 @@ RUN apt-get update && \
       -depth -type d -name __pycache__ -exec rm -rf {} +
 
 # -----------------------------------------------------------------------------
+# Install mosdepth in an isolated stage (preserves downloader cache)
+# -----------------------------------------------------------------------------
+FROM debian:13.7-slim AS mosdepth-builder
+
+ARG TARGETARCH
+ARG MOSDEPTH_VERSION=0.3.9
+ARG MOSDEPTH_SHA256=ad94aa2bd199c6fd103821d00566765d611f2a4741ce44c5ab723d3b800b911b
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates bzip2 && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /opt/mosdepth-env/bin && \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+      curl -fL -o /opt/mosdepth-env/bin/mosdepth \
+        "https://github.com/brentp/mosdepth/releases/download/v${MOSDEPTH_VERSION}/mosdepth" && \
+      echo "${MOSDEPTH_SHA256}  /opt/mosdepth-env/bin/mosdepth" | sha256sum -c - && \
+      chmod +x /opt/mosdepth-env/bin/mosdepth; \
+    else \
+      curl -Ls https://micro.mamba.pm/api/micromamba/linux-aarch64/latest | tar -xvj -C /tmp bin/micromamba && \
+      /tmp/bin/micromamba create -y -p /opt/mosdepth-env -c bioconda -c conda-forge "mosdepth>=${MOSDEPTH_VERSION}" && \
+      rm -rf /tmp/bin /opt/mosdepth-env/include /opt/mosdepth-env/share /opt/mosdepth-env/conda-meta /opt/mosdepth-env/lib/*.a; \
+    fi && \
+    /opt/mosdepth-env/bin/mosdepth -h
+
+# -----------------------------------------------------------------------------
 # Final runtime container
 # -----------------------------------------------------------------------------
 FROM debian:13.7-slim
@@ -293,7 +317,7 @@ COPY --from=downloader /opt/arm64-libs/ /usr/local/lib/
 COPY --from=downloader /usr/local/bin/samtools /usr/local/bin/samtools
 COPY --from=downloader /usr/local/bin/bcftools /usr/local/bin/bcftools
 COPY --from=downloader /usr/local/bin/bedtools-${BEDTOOLS_VERSION} /usr/local/bin/bedtools-${BEDTOOLS_VERSION}
-COPY --from=downloader /usr/local/bin/mosdepth-${MOSDEPTH_VERSION} /usr/local/bin/mosdepth-${MOSDEPTH_VERSION}
+COPY --from=mosdepth-builder /opt/mosdepth-env /opt/mosdepth-env
 COPY --from=downloader /opt/vg-bin/ /usr/local/bin/
 COPY --from=downloader /usr/local/bin/kmc-${KMC_VERSION} /usr/local/bin/kmc-${KMC_VERSION}
 COPY --from=downloader /usr/local/bin/kmc_tools-${KMC_VERSION} /usr/local/bin/kmc_tools-${KMC_VERSION}
@@ -310,6 +334,7 @@ RUN cd /usr/lib && \
     cd /usr/local/bin/ && \
     ln -s /usr/local/aws-cli/v2/current/bin/aws aws && \
     ln -s bedtools-${BEDTOOLS_VERSION} bedtools && \
+    ln -s /opt/mosdepth-env/bin/mosdepth mosdepth-${MOSDEPTH_VERSION} && \
     ln -s mosdepth-${MOSDEPTH_VERSION} mosdepth && \
     if [ -f "vg-${VG_VERSION}" ]; then ln -s vg-${VG_VERSION} vg; fi && \
     ln -s kmc-${KMC_VERSION} kmc && \
