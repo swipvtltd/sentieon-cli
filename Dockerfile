@@ -120,8 +120,7 @@ RUN mkdir -p /opt/vg-bin && \
       chmod +x /opt/vg-bin/vg-${VG_VERSION}; \
     fi
 
-# Install kmc (prebuilt on amd64; source build from Sentieon fork on arm64)
-RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
+# Install kmc (prebuilt on amd64; source build from Sentieon fork on arm64)RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /tmp/kmc.tar.gz "https://github.com/Sentieon/KMC/releases/download/${KMC_RELEASE_TAG}/KMC${KMC_VERSION}.linux.x64.tar.gz" && \
       echo "${KMC_SHA256}  /tmp/kmc.tar.gz" | sha256sum -c - && \
@@ -132,7 +131,7 @@ RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
       cp /opt/kmc-${KMC_VERSION}/bin/kmc_dump /usr/local/bin/kmc_dump-${KMC_VERSION}; \
     else \
       git clone --depth 1 --branch "${KMC_RELEASE_TAG}" https://github.com/Sentieon/KMC.git /tmp/kmc-src && \
-      make -C /tmp/kmc-src -j"$(nproc)" && \
+      make -C /tmp/kmc-src -j"$(nproc)" kmc kmc_tools kmc_dump && \
       cp /tmp/kmc-src/bin/kmc /usr/local/bin/kmc-${KMC_VERSION} && \
       cp /tmp/kmc-src/bin/kmc_tools /usr/local/bin/kmc_tools-${KMC_VERSION} && \
       cp /tmp/kmc-src/bin/kmc_dump /usr/local/bin/kmc_dump-${KMC_VERSION} && \
