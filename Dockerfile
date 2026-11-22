@@ -4,7 +4,6 @@ ARG TARGETARCH
 
 # Tool versions and pinned SHA-256 checksums. Bumping a version is a
 # two-line edit (version + hash) in this block.
-ARG SENTIEON_VERSION
 ARG SAMTOOLS_VERSION=1.23.1
 ARG SAMTOOLS_SHA256=32266198a4bc6a6df395d8526688c9697d9c8e472f888c749fdde2e08ea88dd2
 ARG BCFTOOLS_VERSION=1.23.1
@@ -35,10 +34,8 @@ ARG SEGDUP_CALLER_COMMIT=37c299fe16970215712b7a4ebdf1932f923e903a
 ARG POETRY_VERSION=2.3.4
 ARG POETRY_PLUGIN_EXPORT_VERSION=1.9.0
 
-RUN test -n "$SENTIEON_VERSION"
-
 # Install all build dependencies for the downloader stage in one pass.
-# nasm is x86-only; cmake is needed to compile ExpansionHunter on arm64; unzip is needed for AWS CLI.
+# nasm is x86-only; cmake/libboost are needed for ExpansionHunter on arm64; unzip is needed for AWS CLI.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates bzip2 unzip autoconf automake libtool make cmake gcc g++ perl \
       git python3 python3-venv zlib1g-dev libbz2-dev liblzma-dev \
@@ -71,7 +68,7 @@ RUN mkdir -p /opt/bcftools/ && \
     make -j"$(nproc)" install && \
     strip /usr/local/bin/bcftools
 
-# Install bedtools (static binary on amd64; source build on arm64)
+# Install bedtools (static binary on amd64; source build with GCC 14 + python3 fixes on arm64)
 RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /usr/local/bin/bedtools-${BEDTOOLS_VERSION} \
         "https://github.com/arq5x/bedtools2/releases/download/v${BEDTOOLS_VERSION}/bedtools.static.binary" && \
@@ -99,8 +96,9 @@ RUN mkdir -p /opt/isa-l && \
     ./configure --prefix=/usr --libdir=/usr/lib && \
     make -j"$(nproc)" install
 
-# Install mosdepth (static binary on amd64; bioconda arm64 binary via micromamba on arm64)
-RUN if [ "$TARGETARCH" = "amd64" ]; then \
+# Install mosdepth (static binary on amd64; bioconda binary + libhts on arm64)
+RUN mkdir -p /opt/arm64-libs && \
+    if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /usr/local/bin/mosdepth-${MOSDEPTH_VERSION} \
         "https://github.com/brentp/mosdepth/releases/download/v${MOSDEPTH_VERSION}/mosdepth" && \
       echo "${MOSDEPTH_SHA256}  /usr/local/bin/mosdepth-${MOSDEPTH_VERSION}" | sha256sum -c - && \
@@ -109,6 +107,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
       curl -Ls https://micro.mamba.pm/api/micromamba/linux-aarch64/latest | tar -xvj -C /tmp bin/micromamba && \
       /tmp/bin/micromamba create -y -p /tmp/mosdepth-env -c bioconda -c conda-forge "mosdepth=${MOSDEPTH_VERSION}" && \
       cp /tmp/mosdepth-env/bin/mosdepth /usr/local/bin/mosdepth-${MOSDEPTH_VERSION} && \
+      cp -a /tmp/mosdepth-env/lib/libhts.so* /opt/arm64-libs/ 2>/dev/null || true && \
       rm -rf /tmp/bin /tmp/mosdepth-env; \
     fi
 
@@ -143,7 +142,7 @@ RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
       /usr/local/bin/kmc_tools-${KMC_VERSION} \
       /usr/local/bin/kmc_dump-${KMC_VERSION}
 
-# Install ExpansionHunter (prebuilt on amd64; CMake source build on arm64)
+# Install ExpansionHunter (prebuilt on amd64; CMake source build with GCC 14 header fixes on arm64)
 RUN mkdir -p /tmp/eh && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /tmp/eh.tar.gz "https://github.com/Illumina/ExpansionHunter/releases/download/v${EXPANSIONHUNTER_VERSION}/ExpansionHunter-v${EXPANSIONHUNTER_VERSION}-linux_x86_64.tar.gz" && \
@@ -153,7 +152,9 @@ RUN mkdir -p /tmp/eh && \
     else \
       curl -fL "https://github.com/Illumina/ExpansionHunter/archive/refs/tags/v${EXPANSIONHUNTER_VERSION}.tar.gz" | \
         tar -C /tmp/eh --strip-components=1 -zxf - && \
-      cmake -S /tmp/eh -B /tmp/eh/build -DCMAKE_BUILD_TYPE=Release && \
+      cmake -S /tmp/eh -B /tmp/eh/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CXX_FLAGS="-include cstdint -include limits" && \
       cmake --build /tmp/eh/build -j"$(nproc)" && \
       cp /tmp/eh/build/install/bin/ExpansionHunter /usr/local/bin/ExpansionHunter-${EXPANSIONHUNTER_VERSION}; \
     fi && \
@@ -189,21 +190,27 @@ RUN git clone --branch ${SEGDUP_CALLER_GIT_TAG} https://github.com/Sentieon/segd
     cd /opt/segdup-caller-src && \
     test "$(git rev-parse HEAD)" = "${SEGDUP_CALLER_COMMIT}"
 
-# Download the Sentieon software and normalize the destination directory name
-RUN mkdir -p /opt/sentieon/sentieon-genomics-${SENTIEON_VERSION} && \
+# Install poetry
+RUN python3 -m venv /opt/poetry-venv && \
+    /opt/poetry-venv/bin/pip install --no-cache-dir \
+      "poetry==${POETRY_VERSION}" \
+      "poetry-plugin-export==${POETRY_PLUGIN_EXPORT_VERSION}"
+
+# Download Sentieon last (before app COPY) so bumping SENTIEON_VERSION preserves all tool build caches above.
+# Pass --build-arg SENTIEON_ARM64_URL=<url> if your ARM64 package uses a custom download URL.
+ARG SENTIEON_VERSION
+ARG SENTIEON_ARM64_URL=""
+RUN test -n "$SENTIEON_VERSION" && \
+    mkdir -p /opt/sentieon/sentieon-genomics-${SENTIEON_VERSION} && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       SENTIEON_URL="https://s3.amazonaws.com/sentieon-release/software/sentieon-genomics-${SENTIEON_VERSION}.tar.gz"; \
     elif [ "$TARGETARCH" = "arm64" ]; then \
-      SENTIEON_URL="https://s3.amazonaws.com/sentieon-release/software/arm-sentieon-genomics-${SENTIEON_VERSION}.tar.gz"; \
+      SENTIEON_URL="${SENTIEON_ARM64_URL:-https://s3.amazonaws.com/sentieon-release/software/arm-sentieon-genomics-${SENTIEON_VERSION}.tar.gz}"; \
     else \
       echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1; \
     fi && \
     curl -fL "$SENTIEON_URL" | \
       tar -zxf - --strip-components=1 -C /opt/sentieon/sentieon-genomics-${SENTIEON_VERSION}
-
-# Install poetry
-RUN python3 -m venv /opt/poetry-venv && \
-    /opt/poetry-venv/bin/pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
 # Build the sentieon-cli wheel and requirements.txt
 COPY data /opt/sentieon-cli/data
@@ -211,9 +218,7 @@ COPY pyproject.toml /opt/sentieon-cli/pyproject.toml
 COPY poetry.lock /opt/sentieon-cli/poetry.lock
 COPY sentieon_cli /opt/sentieon-cli/sentieon_cli
 COPY README.md /opt/sentieon-cli/README.md
-RUN /opt/poetry-venv/bin/pip install --no-cache-dir \
-      "poetry-plugin-export==${POETRY_PLUGIN_EXPORT_VERSION}" && \
-    cd /opt/sentieon-cli/ && \
+RUN cd /opt/sentieon-cli/ && \
     /opt/poetry-venv/bin/poetry build -f wheel && \
     /opt/poetry-venv/bin/poetry export \
       --only main,container \
@@ -224,7 +229,6 @@ RUN /opt/poetry-venv/bin/pip install --no-cache-dir \
 # Build the Python environments in an isolated stage
 # -----------------------------------------------------------------------------
 FROM debian:13.7-slim AS python-builder
-ARG SENTIEON_VERSION
 
 COPY --from=downloader /opt/sentieon-cli/dist /opt/sentieon-cli/dist
 COPY --from=downloader /opt/segdup-caller-src /opt/segdup-caller-src
@@ -280,6 +284,7 @@ LABEL org.opencontainers.image.title="sentieon-cli" \
 COPY --from=downloader /opt/sentieon/sentieon-genomics-${SENTIEON_VERSION} /opt/sentieon/sentieon-genomics-${SENTIEON_VERSION}
 COPY --from=downloader /usr/bin/igzip /usr/bin/igzip
 COPY --from=downloader /usr/lib/libisal.so.2.0.30 /usr/lib/libisal.so.2.0.30
+COPY --from=downloader /opt/arm64-libs/ /usr/local/lib/
 COPY --from=downloader /usr/local/bin/samtools /usr/local/bin/samtools
 COPY --from=downloader /usr/local/bin/bcftools /usr/local/bin/bcftools
 COPY --from=downloader /usr/local/bin/bedtools-${BEDTOOLS_VERSION} /usr/local/bin/bedtools-${BEDTOOLS_VERSION}
@@ -310,13 +315,14 @@ RUN cd /usr/lib && \
         "${EXPANSIONHUNTER_VERSION}" > ExpansionHunter && \
     chmod +x ExpansionHunter
 
-# Install runtime dependencies and create an arch-agnostic symlink for libjemalloc
+# Install runtime dependencies, refresh linker cache, and create arch-agnostic libjemalloc symlink
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libjemalloc2 procps libdeflate0 libbz2-1.0 liblzma5 \
       libcurl3-gnutls libssl3 libperl5.40 libgsl28 libncurses6 \
       libstdc++6 perl curl python3 && \
     rm -rf /var/lib/apt/lists/* && \
+    ldconfig && \
     find /usr/lib -name libjemalloc.so.2 -exec ln -sf {} /usr/lib/libjemalloc.so.2 \;
 
 ENV SENTIEON_INSTALL_DIR=/opt/sentieon/sentieon-genomics-$SENTIEON_VERSION
