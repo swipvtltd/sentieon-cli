@@ -120,7 +120,8 @@ RUN mkdir -p /opt/vg-bin && \
       chmod +x /opt/vg-bin/vg-${VG_VERSION}; \
     fi
 
-# Install kmc (prebuilt on amd64; source build from Sentieon fork on arm64)RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
+# Install kmc (prebuilt on amd64; source build from Sentieon fork on arm64)
+RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /tmp/kmc.tar.gz "https://github.com/Sentieon/KMC/releases/download/${KMC_RELEASE_TAG}/KMC${KMC_VERSION}.linux.x64.tar.gz" && \
       echo "${KMC_SHA256}  /tmp/kmc.tar.gz" | sha256sum -c - && \
