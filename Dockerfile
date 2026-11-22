@@ -142,7 +142,7 @@ RUN mkdir -p /opt/kmc-${KMC_VERSION} && \
       /usr/local/bin/kmc_tools-${KMC_VERSION} \
       /usr/local/bin/kmc_dump-${KMC_VERSION}
 
-# Install ExpansionHunter (prebuilt on amd64; CMake source build with GCC 14 header fixes on arm64)
+# Install ExpansionHunter (prebuilt on amd64; CMake source build with Boost URL + GCC 14 fixes on arm64)
 RUN mkdir -p /tmp/eh && \
     if [ "$TARGETARCH" = "amd64" ]; then \
       curl -fL -o /tmp/eh.tar.gz "https://github.com/Illumina/ExpansionHunter/releases/download/v${EXPANSIONHUNTER_VERSION}/ExpansionHunter-v${EXPANSIONHUNTER_VERSION}-linux_x86_64.tar.gz" && \
@@ -152,11 +152,16 @@ RUN mkdir -p /tmp/eh && \
     else \
       curl -fL "https://github.com/Illumina/ExpansionHunter/archive/refs/tags/v${EXPANSIONHUNTER_VERSION}.tar.gz" | \
         tar -C /tmp/eh --strip-components=1 -zxf - && \
-      cmake -S /tmp/eh -B /tmp/eh/build \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_FLAGS="-include cstdint -include limits" && \
-      cmake --build /tmp/eh/build -j"$(nproc)" && \
-      cp /tmp/eh/build/install/bin/ExpansionHunter /usr/local/bin/ExpansionHunter-${EXPANSIONHUNTER_VERSION}; \
+      sed -i 's|https://boostorg.jfrog.io/artifactory/main|https://archives.boost.io|g' /tmp/eh/CMakeLists.txt && \
+      mkdir -p /tmp/eh-bin && \
+      printf '#!/bin/sh\nfor arg in "$@"; do\n  if [ "$arg" = "-c" ]; then\n    exec /usr/bin/g++ "$@" -include cstdint -include limits -Wno-error\n  fi\ndone\nexec /usr/bin/g++ "$@"\n' > /tmp/eh-bin/g++ && \
+      chmod +x /tmp/eh-bin/g++ && \
+      ln -s /tmp/eh-bin/g++ /tmp/eh-bin/c++ && \
+      PATH="/tmp/eh-bin:$PATH" CXX=/tmp/eh-bin/g++ cmake -S /tmp/eh -B /tmp/eh/build \
+        -DCMAKE_BUILD_TYPE=Release && \
+      PATH="/tmp/eh-bin:$PATH" CXX=/tmp/eh-bin/g++ cmake --build /tmp/eh/build -j"$(nproc)" && \
+      cp /tmp/eh/build/install/bin/ExpansionHunter /usr/local/bin/ExpansionHunter-${EXPANSIONHUNTER_VERSION} && \
+      rm -rf /tmp/eh-bin; \
     fi && \
     chmod +x /usr/local/bin/ExpansionHunter-${EXPANSIONHUNTER_VERSION} && \
     rm -rf /tmp/eh /tmp/eh.tar.gz
