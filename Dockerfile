@@ -268,8 +268,8 @@ ARG MOSDEPTH_SHA256=ad94aa2bd199c6fd103821d00566765d611f2a4741ce44c5ab723d3b800b
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates bzip2 && \
     rm -rf /var/lib/apt/lists/* && \
-    mkdir -p /opt/mosdepth-env/bin && \
     if [ "$TARGETARCH" = "amd64" ]; then \
+      mkdir -p /opt/mosdepth-env/bin && \
       curl -fL -o /opt/mosdepth-env/bin/mosdepth \
         "https://github.com/brentp/mosdepth/releases/download/v${MOSDEPTH_VERSION}/mosdepth" && \
       echo "${MOSDEPTH_SHA256}  /opt/mosdepth-env/bin/mosdepth" | sha256sum -c - && \
