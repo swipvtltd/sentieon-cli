@@ -282,6 +282,42 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
     /opt/mosdepth-env/bin/mosdepth -h
 
 # -----------------------------------------------------------------------------
+# Install cuteSV, Sniffles2, and Jasmine in an isolated stage
+# -----------------------------------------------------------------------------
+FROM debian:13.7-slim AS sv-builder
+
+ARG CUTESV_VERSION=2.1.2
+ARG SNIFFLES_VERSION=2.8.1
+ARG JASMINE_VERSION=1.1.5
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      curl ca-certificates python3 python3-venv python3-dev \
+      gcc g++ make zlib1g-dev libbz2-dev liblzma-dev libcurl4-gnutls-dev && \
+    rm -rf /var/lib/apt/lists/* && \
+    python3 -m venv /opt/sv-callers-venv && \
+    /opt/sv-callers-venv/bin/pip install --no-cache-dir \
+      "cuteSV==${CUTESV_VERSION}" \
+      "sniffles==${SNIFFLES_VERSION}" && \
+    /opt/sv-callers-venv/bin/pip uninstall -y pip wheel && \
+    find /opt/sv-callers-venv -depth -type d -name __pycache__ -exec rm -rf {} + && \
+    /opt/sv-callers-venv/bin/cuteSV -h > /dev/null && \
+    /opt/sv-callers-venv/bin/sniffles --version
+
+RUN mkdir -p /tmp/jasmine /opt/jasmine-${JASMINE_VERSION} && \
+    curl -fL "https://github.com/mkirsche/Jasmine/archive/refs/tags/v${JASMINE_VERSION}.tar.gz" | \
+      tar -zxf - --strip-components=1 -C /tmp/jasmine && \
+    cp /tmp/jasmine/jasmine \
+       /tmp/jasmine/igv_jasmine \
+       /tmp/jasmine/split_jasmine \
+       /tmp/jasmine/*.jar \
+       /opt/jasmine-${JASMINE_VERSION}/ && \
+    chmod +x /opt/jasmine-${JASMINE_VERSION}/jasmine \
+             /opt/jasmine-${JASMINE_VERSION}/igv_jasmine \
+             /opt/jasmine-${JASMINE_VERSION}/split_jasmine && \
+    rm -rf /tmp/jasmine
+
+# -----------------------------------------------------------------------------
 # Final runtime container
 # -----------------------------------------------------------------------------
 FROM debian:13.7-slim
@@ -294,6 +330,7 @@ ARG VG_VERSION=1.73.0
 ARG KMC_VERSION=3.2.4
 ARG EXPANSIONHUNTER_VERSION=5.0.0
 ARG T1K_VERSION=1.0.9
+ARG JASMINE_VERSION=1.1.5
 ARG VCS_REF
 ARG BUILD_DATE
 
@@ -326,8 +363,9 @@ COPY --from=downloader /usr/local/bin/ExpansionHunter-${EXPANSIONHUNTER_VERSION}
 COPY --from=downloader /opt/t1k-${T1K_VERSION} /opt/t1k-${T1K_VERSION}
 COPY --from=downloader /opt/sentieon-cli/dist /opt/sentieon-cli/dist
 COPY --from=downloader /usr/local/aws-cli /usr/local/aws-cli
+COPY --from=sv-builder /opt/jasmine-${JASMINE_VERSION} /opt/jasmine-${JASMINE_VERSION}
 
-# Create symlinks for libisal, AWS CLI, and third-party tools
+# Create symlinks and wrappers for libisal, AWS CLI, and third-party tools
 RUN cd /usr/lib && \
     ln -s libisal.so.2.0.30 libisal.so.2 && \
     ln -s libisal.so.2 libisal.so && \
@@ -343,14 +381,21 @@ RUN cd /usr/lib && \
     ln -s /opt/t1k-${T1K_VERSION}/run-t1k run-t1k && \
     printf '#!/bin/sh\nexec env -u LD_PRELOAD /usr/local/bin/ExpansionHunter-%s "$@"\n' \
         "${EXPANSIONHUNTER_VERSION}" > ExpansionHunter && \
-    chmod +x ExpansionHunter
+    printf '#!/bin/sh\nexec env -u LD_PRELOAD /opt/jasmine-%s/jasmine "$@"\n' \
+        "${JASMINE_VERSION}" > jasmine && \
+    printf '#!/bin/sh\nexec env -u LD_PRELOAD /opt/jasmine-%s/igv_jasmine "$@"\n' \
+        "${JASMINE_VERSION}" > igv_jasmine && \
+    printf '#!/bin/sh\nexec env -u LD_PRELOAD /opt/jasmine-%s/split_jasmine "$@"\n' \
+        "${JASMINE_VERSION}" > split_jasmine && \
+    chmod +x ExpansionHunter jasmine igv_jasmine split_jasmine
 
-# Install runtime dependencies, refresh linker cache, and create arch-agnostic libjemalloc symlink
+# Install runtime dependencies (including headless JRE for Jasmine), refresh linker cache,
+# and create arch-agnostic libjemalloc symlink
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libjemalloc2 procps libdeflate0 libbz2-1.0 liblzma5 \
       libcurl3-gnutls libssl3 libperl5.40 libgsl28 libncurses6 \
-      libstdc++6 perl curl python3 && \
+      libstdc++6 perl curl python3 default-jre-headless && \
     rm -rf /var/lib/apt/lists/* && \
     ldconfig && \
     find /usr/lib -name libjemalloc.so.2 -exec ln -sf {} /usr/lib/libjemalloc.so.2 \;
@@ -362,12 +407,13 @@ ENV LD_PRELOAD=/usr/lib/libjemalloc.so.2
 # Default jemalloc configuration
 ENV MALLOC_CONF=metadata_thp:auto,background_thread:true,dirty_decay_ms:30000,muzzy_decay_ms:30000
 
-# Copy the pre-built venvs from the python-builder stage
+# Copy the pre-built venvs from python-builder and sv-builder
 COPY --from=python-builder /opt/sentieon-cli-venv /opt/sentieon-cli-venv
 COPY --from=python-builder /opt/segdup-caller-venv /opt/segdup-caller-venv
+COPY --from=sv-builder /opt/sv-callers-venv /opt/sv-callers-venv
 ENV VIRTUAL_ENV=/opt/sentieon-cli-venv
 ENV PATH=/opt/sentieon-cli-venv/bin:$PATH
-ENV PATH=$PATH:/opt/segdup-caller-venv/bin
+ENV PATH=$PATH:/opt/segdup-caller-venv/bin:/opt/sv-callers-venv/bin
 
 # Create a non-root user for running the pipelines
 RUN useradd --create-home --uid 1001 --shell /bin/bash sentieon
@@ -387,6 +433,9 @@ RUN sentieon driver --help && \
     ExpansionHunter --help && \
     perl -c "$(command -v run-t1k)" && \
     aws --version && \
+    cuteSV -h > /dev/null && \
+    sniffles --version && \
+    (jasmine 2>&1 || true) | grep -qi "Jasmine" && \
     SENTIEON_LICENSE=placeholder segdup-caller --version && \
     SENTIEON_LICENSE=placeholder python -c "import sys; from packaging.version import Version; \
 from sentieon_cli.stages.segdup import SEGDUP_MIN_VERSIONS; \
