@@ -294,8 +294,11 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       curl ca-certificates python3 python3-venv python3-dev \
       gcc g++ make zlib1g-dev libbz2-dev liblzma-dev libcurl4-gnutls-dev && \
-    rm -rf /var/lib/apt/lists/* && \
-    python3 -m venv /opt/sv-callers-venv && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/sv-callers-venv && \
+    /opt/sv-callers-venv/bin/pip install --no-cache-dir "setuptools<81" wheel && \
+    /opt/sv-callers-venv/bin/pip install --no-cache-dir --no-build-isolation "cigar==0.1.3" && \
     /opt/sv-callers-venv/bin/pip install --no-cache-dir \
       "cuteSV==${CUTESV_VERSION}" \
       "sniffles==${SNIFFLES_VERSION}" && \
@@ -307,14 +310,12 @@ RUN apt-get update && \
 RUN mkdir -p /tmp/jasmine /opt/jasmine-${JASMINE_VERSION} && \
     curl -fL "https://github.com/mkirsche/Jasmine/archive/refs/tags/v${JASMINE_VERSION}.tar.gz" | \
       tar -zxf - --strip-components=1 -C /tmp/jasmine && \
-    cp /tmp/jasmine/jasmine \
-       /tmp/jasmine/igv_jasmine \
-       /tmp/jasmine/split_jasmine \
-       /tmp/jasmine/*.jar \
-       /opt/jasmine-${JASMINE_VERSION}/ && \
+    cp /tmp/jasmine/jasmine /tmp/jasmine/*.jar /opt/jasmine-${JASMINE_VERSION}/ && \
+    for f in igv_jasmine split_jasmine; do \
+      if [ -f "/tmp/jasmine/$f" ]; then cp "/tmp/jasmine/$f" /opt/jasmine-${JASMINE_VERSION}/; fi; \
+    done && \
     chmod +x /opt/jasmine-${JASMINE_VERSION}/jasmine \
-             /opt/jasmine-${JASMINE_VERSION}/igv_jasmine \
-             /opt/jasmine-${JASMINE_VERSION}/split_jasmine && \
+             /opt/jasmine-${JASMINE_VERSION}/*_jasmine 2>/dev/null || true && \
     rm -rf /tmp/jasmine
 
 # -----------------------------------------------------------------------------
